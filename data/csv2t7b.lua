@@ -134,30 +134,80 @@ for class = 1, max_class do
 end
 print("Number of bytes needed to store content: "..bytecount)
 
-print("\n--- PASS 2: Constructing index and data ---")
-data = {index = {}, length = {}, content = torch.ByteTensor(bytecount)}
-progress = {}
+print("\n--- PASS 2: Prepare sorting index ---")
+count_all = 0
 for class = 1, max_class do
-   progress[class] = 0
-   data.index[class] = torch.LongTensor(count[class], nitems - 1)
-   data.length[class] = torch.LongTensor(count[class], nitems - 1)
+   count_all = count_all + count[class]
 end
+
+raw_content_length = {}
+sorted_index = {}
 n = 0
-index = 1
 fd = io.open(config.input)
 for line in fd:lines() do
    n = n + 1
    local content = ParseCSVLine(line)
    local class = tonumber(content[1])
-   progress[class] = progress[class] + 1
-   
+   local content_all = ""
    for i = 2, #content do
       content[i] = content[i]:gsub("\\n", "\n"):gsub("^%s*(.-)%s*$", "%1")
-      data.index[class][progress[class]][i-1] = index
-      data.length[class][progress[class]][i-1] = content[i]:len()
-      ffi.copy(torch.data(data.content:narrow(1, index, content[i]:len() + 1)), content[i])
-      index = index + content[i]:len() + 1
+      if i == 2 then
+         content_all = content[i]
+      else
+         content_all = content_all.." "..content[i]
+      end
    end
+   raw_content_length[n] = content_all:len()
+   sorted_index[n] = n
+   if math.fmod(n, 10000) == 0 then
+      io.write("\rProcessing line "..n)
+      io.flush()
+      collectgarbage()
+   end
+end
+fd:close()
+collectgarbage()
+
+function compare(a,b)
+  return raw_content_length[a] < raw_content_length[b]
+end
+table.sort(sorted_index, compare)
+
+raw_index_to_sorted_index = {}
+for i=1, count_all do
+  raw_index_to_sorted_index[sorted_index[i]] = i
+end
+
+sorted_cumulative_byte = {}
+sorted_cumulative_byte[1] = 1
+for i=2, count_all do
+  sorted_cumulative_byte[i] = sorted_cumulative_byte[i - 1] + raw_content_length[sorted_index[i - 1]] + 1
+end
+
+print("\n--- PASS 3: Constructing data ---")
+data = {index = torch.LongTensor(count_all), content = torch.ByteTensor(bytecount), content_class = torch.LongTensor(count_all), nClasses = torch.LongTensor(1)}
+data.nClasses[1] = max_class
+
+n = 0
+fd = io.open(config.input)
+for line in fd:lines() do
+   n = n + 1
+   local content = ParseCSVLine(line)
+   local class = tonumber(content[1])
+   local content_all = ""
+   for i = 2, #content do
+      content[i] = content[i]:gsub("\\n", "\n"):gsub("^%s*(.-)%s*$", "%1")
+      if i == 2 then
+        content_all = content[i]
+      else
+        content_all = content_all.." "..content[i]
+      end
+   end
+   
+   local sorted_n = raw_index_to_sorted_index[n]
+   data.index[sorted_n] = sorted_cumulative_byte[sorted_n]
+   ffi.copy(torch.data(data.content:narrow(1, sorted_cumulative_byte[sorted_n], content_all:len() + 1)), content_all)
+   data.content_class[sorted_n] = class
 
    if math.fmod(n, 10000) == 0 then
       io.write("\rProcessing line "..n)

@@ -88,6 +88,7 @@ function main.new()
    print("Loading datasets...")
    main.train_data = Data(config.train_data)
    main.val_data = Data(config.val_data)
+   main.test_data = Data(config.test_data)
 
    -- Load the model
    print("Loading the model...")
@@ -106,8 +107,8 @@ function main.new()
 
    -- Initiate the tester
    print("Loading the tester...")
-   main.test_train = Test(main.train_data, main.model, config.loss(), config.test)
    main.test_val = Test(main.val_data, main.model, config.loss(), config.test)
+   main.test_test = Test(main.test_data, main.model, config.loss(), config.test)
 
    -- The record structure
    main.record = {}
@@ -135,29 +136,48 @@ function main.run()
       else
 	 print("Disabling dropouts")
 	 main.model:disableDropouts()
-      end
+    end
+    
+      -- use for collecting error and loss of last training
+      main.train_eras_err = 0
+      main.train_eras_obj = 0
+    
       print("Training for era "..i)
+      print("Current Time: "..os.date("%d-%m-%Y %H:%M:%S"))
       main.train:run(config.main.epoches, main.trainlog)
+      
+      -- print average error and loss
+      main.train_eras_err = main.train_eras_err/config.main.epoches 
+      main.train_eras_obj = main.train_eras_obj/config.main.epoches 
+      print("==> est_train_err: "..string.format("%.2e",main.train_eras_err)..", est_train_obj: "..string.format("%.2e",main.train_eras_obj))
 
       print("Disabling dropouts")
       main.model:disableDropouts()
-      print("Testing on training data for era "..i)
-      main.test_train:run(main.testlog)
+      print("Testing on val data for era "..i)
+      print("Current Time: "..os.date("%d-%m-%Y %H:%M:%S"))
+      main.test_val:run(main.testlog)
+      print("==> val_error: "..string.format("%.4e",main.test_val.e)..", val_loss: "..string.format("%.4e",main.test_val.l))
 
       if config.main.test == nil or config.main.test == true then
 	 print("Disabling dropouts")
 	 print("Testing on test data for era "..i)
-	 main.test_val:run(main.testlog)
+	 print("Current Time: "..os.date("%d-%m-%Y %H:%M:%S"))
+	 main.test_test:run(main.testlog)
+	 print("==> test_error: "..string.format("%.4e",main.test_test.e)..", test_loss: "..string.format("%.4e",main.test_test.l))
       end
 
       print("Recording on era "..i)
-      main.record[#main.record+1] = {train_error = main.test_train.e,
-				     train_loss = main.test_train.l,
-				     val_error = main.test_val.e,
-				     val_loss = main.test_val.l}
+      main.record[#main.record+1] = {val_error = main.test_val.e,
+				     val_loss = main.test_val.l,
+				     test_error = main.test_test.e,
+				     test_loss = main.test_test.l}
       if config.test.confusion then
-	 main.record[#main.record].train_confusion = main.test_train.confusion:clone()
-	 main.record[#main.record].val_confusion = main.test_val.confusion:clone()
+         main.record[#main.record].val_confusion = main.test_val.confusion:clone()
+         main.record[#main.record].test_confusion = main.test_test.confusion:clone()
+         print("==> val_confusion:")
+         main.print_confusion(main.test_val.confusion)
+         print("==> test_confusion:")
+         main.print_confusion(main.test_test.confusion)
       end
       
       print("Visualizing loss")
@@ -168,6 +188,19 @@ function main.run()
       main.save()
       collectgarbage()
    end
+end
+
+-- Print confusion matrix from tensor
+function main.print_confusion(confusion)
+   local tmp=""
+   for i=1, confusion:size()[1] do
+      for j=1, confusion:size()[2] do
+         tmp = tmp..confusion[i][j]
+         if j<confusion:size()[2] then tmp = tmp.." " end
+      end
+      tmp = tmp.."\n"
+   end
+   print(tmp)
 end
 
 -- Final cleaning up
@@ -186,25 +219,25 @@ function main.show(figure_error,figure_loss)
 
    -- Generate errors and losses
    local epoch = torch.linspace(1,#main.record,#main.record):mul(config.main.epoches)
-   local train_error = torch.zeros(#main.record)
    local val_error = torch.zeros(#main.record)
-   local train_loss = torch.zeros(#main.record)
+   local test_error = torch.zeros(#main.record)
    local val_loss = torch.zeros(#main.record)
+   local test_loss = torch.zeros(#main.record)
    for i = 1,#main.record do
-      train_error[i] = main.record[i].train_error
       val_error[i] = main.record[i].val_error
-      train_loss[i] = main.record[i].train_loss
+      test_error[i] = main.record[i].test_error
       val_loss[i] = main.record[i].val_loss
+      test_loss[i] = main.record[i].test_loss
    end
 
    -- Do the plot
    gnuplot.figure(figure_error)
-   gnuplot.plot({"Train",epoch,train_error},{"Validate",epoch,val_error})
-   gnuplot.title("Training and validating error")
+   gnuplot.plot({"Validate",epoch,val_error},{"Test",epoch,test_error})
+   gnuplot.title("Validating and testing error")
    gnuplot.plotflush()
    gnuplot.figure(figure_loss)
-   gnuplot.plot({"Train",epoch,train_loss},{"Validate",epoch,val_loss})
-   gnuplot.title("Training and validating loss")
+   gnuplot.plot({"Validate",epoch,val_loss},{"Test",epoch,test_loss})
+   gnuplot.title("Validating and testing loss")
    gnuplot.plotflush()
 end
 
@@ -220,10 +253,10 @@ function main.save()
 
    -- Make the save
    local time = os.time()
-   torch.save(paths.concat(config.main.save,"main_"..(main.train.epoch-1).."_"..time..".t7b"),
-	      {config = config, record = main.record, momentum = main.train.old_grads:double()})
-   torch.save(paths.concat(config.main.save,"sequential_"..(main.train.epoch-1).."_"..time..".t7b"),
-	      main.model:clearSequential(main.model:makeCleanSequential(main.model.sequential)))
+--   torch.save(paths.concat(config.main.save,"main_"..(main.train.epoch-1).."_"..time..".t7b"),
+--	      {config = config, record = main.record, momentum = main.train.old_grads:double()})
+--   torch.save(paths.concat(config.main.save,"sequential_"..(main.train.epoch-1).."_"..time..".t7b"),
+--	      main.model:clearSequential(main.model:makeCleanSequential(main.model.sequential)))
    main.eps_error = main.eps_error or gnuplot.epsfigure(paths.concat(config.main.save,"figure_error.eps"))
    main.eps_loss = main.eps_loss or gnuplot.epsfigure(paths.concat(config.main.save,"figure_loss.eps"))
    main.show(main.eps_error,main.eps_loss)
@@ -279,6 +312,10 @@ function main.trainlog(train)
 
       main.clock.log = os.time()
    end
+   
+   -- collect error and loss for last training
+   main.train_eras_err = main.train_eras_err + train.error
+   main.train_eras_obj = main.train_eras_obj + train.objective
 end
 
 function main.testlog(test)

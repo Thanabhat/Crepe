@@ -128,10 +128,14 @@ function Model:createModule(m)
       return Model:createLinear(m)
    elseif m.module == "nn.Threshold" then
       return Model:createThreshold(m)
+   elseif m.module == "nn.ReLU" then
+      return Model:createReLU(m)
    elseif m.module == "nn.TemporalConvolution" then
       return Model:createTemporalConvolution(m)
    elseif m.module == "nn.TemporalMaxPooling" then
       return Model:createTemporalMaxPooling(m)
+   elseif m.module == "nn.TemporalDynamicKMaxPooling" then
+      return Model:createTemporalDynamicKMaxPooling(m)
    elseif m.module == "nn.Dropout" then
       return Model:createDropout(m)
    elseif m.module == "nn.LogSoftMax" then
@@ -147,8 +151,12 @@ function Model:makeCleanModule(m)
 	 return Model:toTemporalConvolution(m)
    elseif torch.typename(m) == "nn.Threshold" then
       return Model:newThreshold()
+   elseif torch.typename(m) == "nn.ReLU" then
+      return Model:newReLU()
    elseif torch.typename(m) == "nn.TemporalMaxPooling" then
       return Model:toTemporalMaxPooling(m)
+   elseif torch.typename(m) == "nn.TemporalDynamicKMaxPooling" then
+      return Model:toTemporalDynamicKMaxPooling(m)
    elseif torch.typename(m) == "nn.Reshape" then
       return Model:toReshape(m)
    elseif torch.typename(m) == "nn.Linear" then
@@ -178,6 +186,11 @@ function Model:createThreshold(m)
    return nn.Threshold()
 end
 
+-- Create a new relu model
+function Model:createReLU(m)
+   return nn.ReLU()
+end
+
 -- Create a new Spatial Convolution model
 function Model:createTemporalConvolution(m)
    return nn.TemporalConvolution(m.inputFrameSize, m.outputFrameSize, m.kW, m.dW)
@@ -186,6 +199,11 @@ end
 -- Create a new spatial max pooling model
 function Model:createTemporalMaxPooling(m)
    return nn.TemporalMaxPooling(m.kW, m.dW, m.dH)
+end
+
+-- Create a new dynamic k max pooling model
+function Model:createTemporalDynamicKMaxPooling(m)
+   return nn.TemporalDynamicKMaxPooling(m.minK, m.factor, m.adding)
 end
 
 -- Create a new dropout module
@@ -203,9 +221,19 @@ function Model:newThreshold()
    return nn.Threshold()
 end
 
+-- Create a new relu
+function Model:newReLU()
+   return nn.ReLU()
+end
+
 -- Convert to a new max pooling
 function Model:toTemporalMaxPooling(m)
    return nn.TemporalMaxPooling(m.kW, m.dW)
+end
+
+-- Convert to a new dynamic k max pooling
+function Model:toTemporalDynamicKMaxPooling(m)
+   return nn.TemporalDynamicKMaxPooling(m.minK, m.factor, m.adding)
 end
 
 -- Convert to a new reshape

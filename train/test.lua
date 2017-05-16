@@ -46,8 +46,8 @@ function Test:run(logfunc)
    -- Start the loop
    self.clock = sys.clock()
    for batch,labels,n in self.data:iterator() do
-      self.batch = self.batch or batch:transpose(2,3):contiguous():type(self.model:type())
-      self.labels = self.labels or labels:type(self.model:type())
+      self.batch = batch:transpose(2,3):contiguous():type(self.model:type())
+      self.labels = labels:type(self.model:type())
       self.batch:copy(batch:transpose(2, 3):contiguous())
       self.labels:copy(labels)
       -- Record time
@@ -60,8 +60,8 @@ function Test:run(logfunc)
       self.objective = self.loss:forward(self.output,self.labels)
       if type(self.objective) ~= "number" then self.objective = self.objective[1] end
       self.max, self.decision = self.output:double():max(2)
-      self.max = self.max:squeeze():double()
-      self.decision = self.decision:squeeze():double()
+      self.max = self.max:squeeze(2):double()
+      self.decision = self.decision:squeeze(2):double()
       self.err = torch.ne(self.decision,self.labels:double()):sum()/self.labels:size(1)
       -- Record time
       if self.model:type() == "torch.CudaTensor" then cutorch.synchronize() end
@@ -72,9 +72,10 @@ function Test:run(logfunc)
       self.e = self.e*(self.n/(self.n+n)) +  self.err*(n/(self.n+n))
       self.l = self.l*(self.n/(self.n+n)) + self.objective*(n/(self.n+n))
       if self.confusion then
-	 for i = 1,n do
-	    self.confusion[labels[i]][self.decision[i]] = self.confusion[labels[i]][self.decision[i]]+1
-	 end
+         for i = 1,n do
+            if self.n + i > self.data:nRow() then break end
+            self.confusion[labels[i]][self.decision[i]] = self.confusion[labels[i]][self.decision[i]]+1
+         end
       end
       self.n = self.n + n
       -- Record time
@@ -86,6 +87,4 @@ function Test:run(logfunc)
 
       self.clock = sys.clock()
    end
-   -- Average on the confusion matrix
-   if self.confusion and self.n ~= 0 then self.confusion:div(self.n) end
 end

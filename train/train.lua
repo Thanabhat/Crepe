@@ -74,10 +74,10 @@ end
 function Train:batchStep()
    self.clock = sys.clock()
    -- Get a batch of data
-   self.batch_untyped,self.labels_untyped = self.data:getBatch(self.batch_untyped,self.labels_untyped)
+   self.batch_untyped,self.labels_untyped = self.data:getBatch()
    -- Make the data to correct type
-   self.batch = self.batch or self.batch_untyped:transpose(2, 3):contiguous():type(self.model:type())
-   self.labels = self.labels or self.labels_untyped:type(self.model:type())
+   self.batch = self.batch_untyped:transpose(2, 3):contiguous():type(self.model:type())
+   self.labels = self.labels_untyped:type(self.model:type())
    self.batch:copy(self.batch_untyped:transpose(2, 3):contiguous())
    self.labels:copy(self.labels_untyped)
    -- Record time
@@ -90,9 +90,9 @@ function Train:batchStep()
    self.objective = self.loss:forward(self.output,self.labels)
    if type(self.objective) ~= "number" then self.objective = self.objective[1] end
    self.max, self.decision = self.output:double():max(2)
-   self.max = self.max:squeeze():double()
+   self.max = self.max:squeeze(2):double()
    self.mask = self.labels:double():gt(0):double()
-   self.decision = self.decision:squeeze():double()
+   self.decision = self.decision:squeeze(2):double()
    if self.mask:sum() > 0 then
       self.error = torch.ne(self.decision,self.labels:double()):double():cmul(self.mask):sum()/self.mask:sum()
    else

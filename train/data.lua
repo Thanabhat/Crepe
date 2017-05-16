@@ -11,13 +11,17 @@ local Data = torch.class("Data")
 
 function Data:__init(config)
    -- Alphabet settings
-   self.alphabet = config.alphabet or "abcdefghijklmnopqrstuvwxyz0123456789-,;.!?:'\"/\\|_@#$%^&*~`+-=<>()[]{}"
+   self.alphabet = config.alphabet or "abcdefghijklmnopqrstuvwxyz0123456789-,;.!?:'\"/\\|_@#$%^&*~`+-=<>()[]{}กขฃคฅฆงจฉชซฌญฎฏฐฑฒณดตถทธนบปผฝพฟภมยรฤลฦวศษสหฬอฮฯะัาำิีึืฺุูเแโใไๅๆ็่้๊๋์๐๑๒๓๔๕๖๗๘๙"
    self.dict = {}
-   for i = 1,#self.alphabet do
-      self.dict[self.alphabet:sub(i,i)] = i
+   local c_ind = 1
+   for c in self.alphabet:gmatch(".[\128-\191]*") do
+      self.dict[c] = c_ind
+      c_ind = c_ind + 1
    end
 
    self.length = config.length or 1014
+   self.min_length = config.min_length
+   self.max_length = config.max_length
    self.batch_size = config.batch_size or 128
    self.file = config.file
    self.prob = config.prob
@@ -50,117 +54,113 @@ function Data:__init(config)
 end
 
 function Data:nClasses()
-   return #self.data.index
+   return self.data.nClasses[1]
+end
+
+function Data:nRow()
+   return self.data.index:size(1)
 end
 
 function Data:getBatch(inputs, labels, data, extra)
    local data = data or self.data
    local extra = extra or self.extra
-   local inputs = inputs or torch.Tensor(self.batch_size, #self.alphabet, self.length)
-   local labels = labels or torch.Tensor(inputs:size(1))
+   local labels = torch.Tensor(self.batch_size)
+   
+   local data_length = data.index:size(1)
+   local max_batch_index = torch.ceil(data_length / self.batch_size)
+   local batch_index = torch.random(max_batch_index)
+   
+   local current_index = (batch_index - 1) * self.batch_size
+   local count = 0
+   local max_length = 0
+   local s_list = {}
+   local s_list_char = {}
+   while (count < self.batch_size)
+   do
+      count = count + 1
+      current_index = current_index + 1
+      if current_index > data_length then current_index = (batch_index - 1) * self.batch_size + 1 end
+      labels[count] = data.content_class[current_index]
+      s_list[count] = ffi.string(torch.data(data.content:narrow(1, data.index[current_index], 1)))
+      s_list_char[count] = {}
+      local ind = 1
+      for c in s_list[count]:gmatch(".[\128-\191]*") do
+         s_list_char[count][ind] = c
+         ind = ind + 1
+      end
+      if (#s_list_char[count] > max_length) then max_length = #s_list_char[count] end
+   end
+   if (self.min_length > max_length) then max_length = self.min_length end
+   if (self.max_length < max_length) then max_length = self.max_length end
 
-   for i = 1, inputs:size(1) do
-      local label, s
-      -- Choose data
-      label = torch.random(#data.index)
-      local input = torch.random(data.index[label]:size(1))
-      s = ffi.string(torch.data(data.content:narrow(1, data.index[label][input][data.index[label][input]:size(1)], 1)))
-      for l = data.index[label][input]:size(1) - 1, 1, -1 do
-	 s = s.." "..ffi.string(torch.data(data.content:narrow(1, data.index[label][input][l], 1)))
-      end
-      labels[i] = label
-      -- Thesaurus replacement
-      if self.thes and math.random() < self.thes.p then
-	 local word_list = {}
-	 local word_start, word_end = s:find("%w+")
-	 while word_start do
-	    if word_end - word_start + 1 > self.thes.length and self.thes.data[s:sub(word_start, word_end)] then
-	       word_list[#word_list + 1] = {s:sub(word_start, word_end), word_start, word_end}
-	    end
-	    word_start, word_end = s:find("%w+", word_end + 1)
-	 end
-	 if #word_list > 0 then
-	    local randorder = torch.randperm(#word_list)
-	    for k = 1, #word_list do
-	       if math.random() > self.thes.p then break end
-	       local word = word_list[randorder[k]]
-	       -- Sample from thesaurus using geometric distribution
-	       local j = 1
-	       while self.thes.data[word[1]][j] do
-		  if math.random() < self.thes.q then
-		     word[1] = self.thes.data[word[1]][j]
-		     break
-		  end
-		  j = j + 1
-	       end
-	    end
-	    local news = s:sub(1, word_list[1][2] - 1) .. word_list[1][1]
-	    for k = 2, #word_list do
-	       news = news .. s:sub(word_list[k-1][3] + 1, word_list[k][2] - 1) .. word_list[k][1]
-	    end
-	    news = news .. s:sub(word_list[#word_list][3] + 1)
-	    s = news
-	 end
-      end
-      -- Quantize the string
-      self:stringToTensor(s, self.length, inputs:select(1, i))
+   local inputs = torch.Tensor(self.batch_size, #self.alphabet, max_length)
+   for i = 1, self.batch_size do
+      self:charArrToTensor(s_list_char[i], max_length, inputs:select(1, i))
    end
 
    return inputs, labels
 end
 
 function Data:iterator(static, data)
-   local i = 1
    local j = 0
+   local done = false
    local data = data or self.data
    local static
    if static == nil then static = true end
-
-   if static then
-      inputs = torch.Tensor(self.batch_size, #self.alphabet, self.length)
-      labels = torch.Tensor(inputs:size(1))
-   end
-
+   
    return function()
-      if data.index[i] == nil then return end
+      if done then return end
 
-      local inputs = inputs or torch.Tensor(self.batch_size, #self.alphabet, self.length)
-      local labels = labels or torch.Tensor(inputs:size(1))
+      local labels = torch.Tensor(self.batch_size)
 
+      local s_list = {}
+      local s_list_char = {}
+      local max_length = 0
+      
       local n = 0
-      for k = 1, inputs:size(1) do
-	 j = j + 1
-	 if j > data.index[i]:size(1) then
-	    i = i + 1
-	    if data.index[i] == nil then
-	       break
-	    end
-	    j = 1
-	 end
-	 n = n + 1
-	 local s = ffi.string(torch.data(data.content:narrow(1, data.index[i][j][data.index[i][j]:size(1)], 1)))
-	 for l = data.index[i][j]:size(1) - 1, 1, -1 do
-	    s = s.." "..ffi.string(torch.data(data.content:narrow(1, data.index[i][j][l], 1)))
-	 end
-	 local data = self:stringToTensor(s, self.length, inputs:select(1, k))
-	 labels[k] = i
+      for k = 1, self.batch_size do
+         j = j + 1
+         if j > data.index:size(1) then
+            j = data.index:size(1)
+            done = true
+         end
+         n = n + 1
+         s_list[k] = ffi.string(torch.data(data.content:narrow(1, data.index[j], 1)))
+         s_list_char[k] = {}
+         local ind = 1
+         for c in s_list[k]:gmatch(".[\128-\191]*") do
+            s_list_char[k][ind] = c
+            ind = ind + 1
+         end
+         labels[k] = data.content_class[j]
+         if (#s_list_char[k] > max_length) then max_length = #s_list_char[k] end
+      end
+      if (self.min_length > max_length) then max_length = self.min_length end
+      if (self.max_length < max_length) then max_length = self.max_length end
+
+      local inputs = torch.Tensor(self.batch_size, #self.alphabet, max_length)
+   
+      for k = 1, n do
+         local data = self:charArrToTensor(s_list_char[k], max_length, inputs:select(1, k))
       end
 
       return inputs, labels, n
    end
 end
 
-function Data:stringToTensor(str, l, input, p)
-   local s = str:lower()
+function Data:charArrToTensor(charArr, l, input, p)
+   local s = {}
+   for i = 1, #charArr do
+      s[i] = charArr[i]:lower()
+   end
    local l = l or #s
    local t = input or torch.Tensor(#self.alphabet, l)
    t:zero()
    for i = #s, math.max(#s - l + 1, 1), -1 do
-      if self.dict[s:sub(i,i)] then
-	 t[self.dict[s:sub(i,i)]][#s - i + 1] = 1
+      if self.dict[s[i]] then
+         t[self.dict[s[i]]][#s - i + 1] = 1
       end
    end
-   return t
 end
 
 return Data
